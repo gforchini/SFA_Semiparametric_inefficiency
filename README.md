@@ -1,0 +1,2 @@
+# SFA_Semiparametric_inefficiency
+SFA Semiparametric inefficiency
