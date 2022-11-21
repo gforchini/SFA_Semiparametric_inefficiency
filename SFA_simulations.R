@@ -54,25 +54,32 @@ Model<-cmpfun(function(n,alpha,beta,sigmaU,sigmaV2,k){
 })
 
 
-####################################################################################
-############ Estimator Functions ################################
-####################################################################################
+# The parameter alpha is parameterised as alpha=A(phi)
+# the output is a vector of dimension k-1. This is mapped into a k dimensional 
+# vector on the unit sphere.
+
+A<-cmpfun(function(phi){c(1,phi)/sqrt(1+sum(phi^2))})
 
 
-############################## Log-likelihood for ML ############
+
+################################################################################
+############ Estimators ########################################################
+################################################################################
+
+
+############################## Log-likelihood for ML ###########################
 MLE <- cmpfun(function(gamma,y,x,lambda,opt=TRUE) {
-  # DESCRIBE THE INPUTS' DIMENSIONS
-  p<-dim(x)[2] # Number of rows of x. This is the dimension of alpha and beta
-  alpha<-gamma[1:p] # the vector of the first p components of gamma is alpha
-  beta<-gamma[(p+1):(2*p)] # the vector of the last p components of gamma is beta
-  sigmaV<-gamma[2*p+1] # Variance of V
-  k<-gamma[2*p+2] # Parameter that adapts the parametric model to the
-  eta<-gamma[2*p+3] # intercept
-  # scale of inefficient
+  p<-dim(x)[2] # dimension of beta and alpha
+  alpha<-gamma[1:p] # initial values for alpha
+  beta<-gamma[(p+1):(2*p)] # initial values for beta beta
+  sigmaV<-gamma[2*p+1] # Initial values for the variance of V
+  k<-gamma[2*p+2] # Parameter that adapts the parametric model to the scale of inefficient
+  eta<-gamma[2*p+3] # initial value for the intercept
+  
   a <- x%*%alpha 
   b <- x%*%beta 
   delta<-(k^2)*lambda(a)/sigmaV
-  r<-y-b- eta
+  r <- y-b -eta
   sigma<-sqrt((k^4)*lambda(a)^2+sigmaV^2)
   #Log-likelihood function
   llik <- sum(-log(sigma) - (1/(2*sigma^2))* (r^2) + pnorm(-r*delta/sigma,0,1, log.p=TRUE))
@@ -83,13 +90,13 @@ MLE <- cmpfun(function(gamma,y,x,lambda,opt=TRUE) {
 
 ################# log-likelihood for ML with Separability Constrain ############
 MLESep <- cmpfun(function(gamma,y,x,lambda,opt=TRUE) {
-  # DESCRIBE THE INPUTS' DIMENSIONS
-  p<-dim(x)[2] # Number of rows of x. This is the dimension of alpha and beta
-  alpha<-c(gamma[1:(p/2)],rep(0,p/2)) # last two coefficients constrained to 0
-  beta<-c(rep(0,p/2),gamma[(p+p/2+1):(2*p)]) # two first coefficients constrained to 0
-  sigmaV<-gamma[2*p+1]
-  k<-gamma[2*p+2]
-  eta<-gamma[2*p+3] # intercept
+
+  p<-dim(x)[2] #  dimension of alpha and beta
+  alpha<-c(gamma[1:(p/2)],rep(0,p/2)) # Initial values for alpha - last two coefficients constrained to 0
+  beta<-c(rep(0,p/2),gamma[(p+p/2+1):(2*p)]) # initial values of beta - two first coefficients constrained to 0
+  sigmaV<-gamma[2*p+1] #  initial values for the variance of V
+  k<-gamma[2*p+2] # initial values for the scale of the inefficiency
+  eta<-gamma[2*p+3] # initial values for the intercept
   a <- x%*%alpha 
   b <- x%*%beta 
   delta<-(k^2)*lambda(a)/sigmaV
@@ -106,29 +113,32 @@ MLESep <- cmpfun(function(gamma,y,x,lambda,opt=TRUE) {
 
 ###################### estimation accounting for heteroskedasticity ###################3
 SP <- cmpfun(function(gamma,y,x,w=w, opt=TRUE) {
-  # This function re-estimate alpha and beta with tranformed data that deal
+  # This function re-estimate alpha and beta with transformed data that deal
   # with heteroscedasticity
   # y is a vector of dimension n x 1
   # x is a matrix of dimension n x p
-  # gamma is a vector of dimension 2k x 1. It contains alpha p x 1 and beta p x 1.
+  # gamma is a vector of dimension 2k-1 x 1. It contains alpha p x 1 and beta p x 1.
   # sig is a vector of estimated variances for each i
   # Return ML if opt=TRUE and fitted gam with theta added otherwise.
   
   p<-dim(x)[2] # Number of rows of x. This is the dimension of alpha and beta
-  alpha<-gamma[1:p] # the vector of the first p components of gamma is alpha
-  alpha[1]<-abs(alpha[1]) # The first component of alpha is positive (identification)
-  beta<-gamma[(p+1):(2*p)] 
-  kk <- sum(alpha^2) # sum of squares of alpha
-  alpha <- alpha/sqrt(kk)  ## normalized alpha 
+  phi<-gamma[1:(p-1)]  # initial values for phi
+  beta<-gamma[p:(2*p-1)] # initial values for beta
+  alpha<-A(phi) # map phi to alpha
+  
   a <- x%*%alpha 
-  b <- x%*%beta 
+  b <- x%*%beta
   y2<-(b-y)*w 
   # w is the weight that corrects for heteroscedasticity
   e<- gam(y2~-1+w+s(a,bs="cr",by=w),method="REML") ## fit the varying-coefficient model
   
-  if (opt) return(e$gcv.ubre) else {
-    e$alpha <- alpha 
-    e$beta <- beta           
+  if (opt) 
+    return(e$gcv.ubre) 
+  else {
+    e$phi <- phi
+    e$alpha <- alpha
+    e$beta <- beta
+    e$regressors <- x
     return(e)
   }
 })
@@ -141,44 +151,42 @@ SP <- cmpfun(function(gamma,y,x,w=w, opt=TRUE) {
 
 Estimation<-cmpfun(function(y,x,k,sigmaV2){
   
-  # EXPLAIN WHAT IS HAPPENING IN THE LINES BELOW
-  
-  eps_alpha<-0.1*alpha*runif(4,-1,1)# Deviation between the initial value and the true values
+  # Set starting values close to true value of parameters to speed up convergence
+  phi<-alpha[2:length(alpha)]/alpha[1]
+  eps_phi<-0.1*phi*runif(3,-1,1)# Deviation between the initial value and the true values
+  eps_alpha<-0.1*alpha*runif(4,-1,1)#
   eps_beta<-0.1*beta*runif(4,-1,1)
   eps_sigmaV2<-0.1*sqrt(sigmaV2)*runif(1,-1,1)
   eps_k<-0.1*sqrt(k)*runif(1,-1,1)
   eps_eta<-0.1*1*runif(1,-1,1)
   
   
+  initial_values_sp<-c(phi+eps_phi,beta+eps_beta) # Initial values for SP
   initial_values<-c(alpha+eps_alpha,beta+eps_beta,sqrt(sigmaV2)+eps_sigmaV2,sqrt(k)+eps_k,1+eps_eta) # Initial values
+  message("Initial phi ")
+  message(eps_phi)
   
-  
-  # Estimation without heteroscedasticity correction
-  f1 <-optim(initial_values[1:8], SP, x=x,y=y,w=rep(1,n),method = "BFGS") 
+  # SP Estimation without heteroskedasticity correction
+  f1 <-optim(initial_values_sp, SP, x=x,y=y,w=rep(1,n),method = "Nelder-Mead")  #"BFGS"
   fit1 <- SP(f1$par,y=y,x=x,w=rep(1,n),opt=FALSE)# Return the estimates
   
-  # ExtraCtion of the heterosedastic residuals
+
+  # SP estimation with heteroskedaticity correction
+  
+  # Extraction of the heteroskedastic residuals
   a<-x%*%fit1$alpha
   b<-x%*%fit1$beta
-  
   y2<-b-y  
   ## fit model
   v2<-log(fit1$residuals^2)
   e<-gam(v2~s(a,bs="cr"),method="REML")
-  
-  
   w<-1/sqrt(exp(e$fitted.values)) #weights that correct for heteroscedasticity
-  
-  f2 <-optim(c(fit1$alpha,fit1$beta),SP,x=x,y=y,w=w,method = "BFGS")
-  
-  
-  #Estimation with heteroscedasticiy correction
+  #Estimation 
+  f2 <-optim(c(fit1$phi,fit1$beta),SP,x=x,y=y,w=w,method = "BFGS")
   fit2 <- SP(f2$par,x=x,y=y,w=w,opt=FALSE) ## extract best fit model
 
-  
-  
-  a<-x%*%fit2$alpha
-  b<-x%*%fit2$beta
+  #a<-x%*%fit2$alpha   # are these used?
+  #b<-x%*%fit2$beta
   
   
   ##### General MLE ######
@@ -189,7 +197,6 @@ Estimation<-cmpfun(function(y,x,k,sigmaV2){
   fitMLEexp <- MLE(theta.est,lambda=exp, x=x,y=y,opt=FALSE)
   
   
-  
   # MLE with logistic inefficiencies
   f0MLE <-optim(initial_values,MLE,lambda=plogis, x=x,y=y,method = "BFGS") 
   theta.est<-f0MLE$par
@@ -198,7 +205,7 @@ Estimation<-cmpfun(function(y,x,k,sigmaV2){
   
   ##### MLE with separability #####
   
-  # Note that the Nelder-Mead method is used  instead of BFGS for the exponential
+  # Note that the Nelder-Mead method is used  instead of BFGS
   
   # MLE with exponential inefficiencies
   f0MLE <-optim(initial_values,MLESep,lambda=exp, x=x,y=y,method = "Nelder-Mead") 
@@ -263,12 +270,20 @@ Estimation<-cmpfun(function(y,x,k,sigmaV2){
                   eta.MLESeplogis,
                   eta.hom,
                   eta.hete),
-                c(fitMLEexp[1:4],fitMLElogis[1:4],
-                  fitMLESepexp[1:4],fitMLESeplogis[1:4],
-                  fit1$alpha,fit2$alpha),
-                c(fitMLEexp[5:8],fitMLElogis[5:8],
-                  fitMLESepexp[5:8],fitMLESeplogis[5:8],
-                  fit1$beta,fit2$beta))
+                c(fitMLEexp[1:4],
+                  fitMLElogis[1:4],
+                  fitMLESepexp[1:4],
+                  fitMLESeplogis[1:4],
+                  fit1$alpha,
+                  fit2$alpha),
+                c(fitMLEexp[5:8],
+                  fitMLElogis[5:8],
+                  fitMLESepexp[5:8],
+                  fitMLESeplogis[5:8],
+                  fit1$beta,
+                  fit2$beta),
+                c(fit1$phi,
+                  fit2$phi))
   
   return( results)
   
@@ -301,9 +316,9 @@ Simulation<-function(alpha, beta,sigmaU,rep,n,titletable){
   mu1<-eta-delta1
   sigmaV2<-0.1*var(U)
   
-  Design<-foreach (i=1:rep,.export=c("gam","Model","Estimation","SP","MLE","MLESep","mu1"),.combine=cbind,.options.RNG = 58219)  %dorng% {
+  Design<-foreach (i=1:rep,.export=c("gam","Model","Estimation","SP","MLE","MLESep","mu1","A"),.combine=cbind,.options.RNG = 58219)  %dorng% {
     
-    S <-head(Model(n=n,alpha=alpha,beta=beta,sigmaU=sigmaU,sigmaV2=sigmaV2,k=k1))
+    S <-Model(n=n,alpha=alpha,beta=beta,sigmaU=sigmaU,sigmaV2=sigmaV2,k=k1)
    
     ########### Extract sample ##########
     y<-S[[1]] 
@@ -320,6 +335,7 @@ Simulation<-function(alpha, beta,sigmaU,rep,n,titletable){
   etaDesign<-Reduce(cbind,Design[3,])
   alphaDesign<-Reduce(cbind,Design[4,])
   betaDesign<-Reduce(cbind,Design[5,])
+
   
 
   
@@ -370,6 +386,8 @@ Simulation<-function(alpha, beta,sigmaU,rep,n,titletable){
                          ,apply(abs(betaDesign[c(1,5,9,13,17,21)+2,]-Design.beta3median),1,median)
                          ,apply(abs(betaDesign[c(1,5,9,13,17,21)+3,]-Design.beta4median),1,median))
   
+  
+  
   ##### Build tables of results #####
   
   # For different intercepts
@@ -414,7 +432,7 @@ Simulation<-function(alpha, beta,sigmaU,rep,n,titletable){
 n<-200  # Sample size
 rep<-10000 # Number of samples
 
-workers <- 27
+workers <- 12
 cl <- parallel::makeCluster(workers)
 
 # register the cluster for using foreach
@@ -426,7 +444,6 @@ doParallel::registerDoParallel(cl)
 #The design 1 has exponential Inefficiency and separability
 ######################################################
 alpha<-c(.6,-.8,0 ,0)
-alpha<-alpha/as.vector(sqrt(alpha%*%alpha)) #Alpha is on the unit sphere 
 beta<-c(0,0,-.3,.8)
 sigmaU<-exp
 titletable<-"Design 1"
@@ -439,7 +456,6 @@ Simulation(alpha, beta,sigmaU,rep,n,titletable)
 ######################################################
 
 alpha<-c(.6,-.8,0 ,0)
-alpha<-alpha/as.vector(sqrt(alpha%*%alpha)) #Alpha is on the unit sphere 
 beta<-c(0,0,-.3,.8)
 sigmaU<-function(x) exp(x)/(1+exp(x))
 titletable<-"Design 2"
@@ -450,8 +466,7 @@ Simulation(alpha, beta,sigmaU,rep,n,titletable)
 # Design 3: Exponential
 #######################################
 
-alpha<-c(1,-1, -1 , 1)
-alpha<-alpha/as.vector(sqrt(alpha%*%alpha)) #Alpha is on the unit sphere 
+alpha<-c(0.5, -0.5, -0.5,  0.5)
 beta<-c(.75,-.25,-.25,.75)
 lambda<-exp
 titletable<-"Design 3"
@@ -465,8 +480,7 @@ Simulation(alpha, beta,sigmaU,rep,n,titletable)
 #################################
 
 
-alpha<-c(1,-1, -1 , 1)
-alpha<-alpha/as.vector(sqrt(alpha%*%alpha)) #Alpha is on the unit sphere 
+alpha<-c(0.5, -0.5, -0.5,  0.5)
 beta<-c(.75,-.25,-.25,.75)
 sigmaU<-function(x) exp(x)/(1+exp(x))
 titletable<-"Design 4"
@@ -480,7 +494,6 @@ Simulation(alpha, beta,sigmaU,rep,n,titletable)
 ############################################################
 
 alpha<-c(.6,-.8,0 ,0)
-alpha<-alpha/as.vector(sqrt(alpha%*%alpha)) #Alpha is on the unit sphere 
 beta<-c(0,0,-.3,.8)
 sigmaU<- function(x) 1+cos(x)
 titletable<-"Design 5"
@@ -492,8 +505,7 @@ Simulation(alpha, beta,sigmaU,rep,n,titletable)
 ###### Design 6: trigonometric without separability ###########
 ###############################################################
 
-alpha<-c(1,-1, -1 , 1)
-alpha<-alpha/as.vector(sqrt(alpha%*%alpha)) #Alpha is on the unit sphere 
+alpha<-c(0.5, -0.5, -0.5,  0.5)
 beta<-c(.75,-.25,-.25,.75)
 sigmaU<- function(x) 1+cos(x)
 titletable<-"Design 6"
@@ -517,7 +529,7 @@ Simulation(alpha, beta,sigmaU,rep,n,titletable)
 ###### Design 8: locally linear without separability #######
 ############################################################
 
-alpha<-c(1,-1, -1 , 1)
+alpha<-c(0.5, -0.5, -0.5,  0.5)
 alpha<-alpha/as.vector(sqrt(alpha%*%alpha)) #Alpha is on the unit sphere 
 beta<-c(.75,-.25,-.25,.75)
 sigmaU<- function(x) {ifelse(( (x+.5)/2 <= -1),25+22*(x+.5)+5*(x+.5)^2,ifelse((-1<(x+.5)/2),5+2*(x+.5),NA))}
@@ -543,12 +555,11 @@ Simulation(alpha, beta,sigmaU,rep,n,titletable)
 ###### Design 10: partially constant without separability ######
 ################################################################
 
-alpha<-c(1,-1, -1 , 1)
+alpha<-c(0.5, -0.5, -0.5,  0.5)
 alpha<-alpha/as.vector(sqrt(alpha%*%alpha)) #Alpha is on the unit sphere 
 beta<-c(.75,-.25,-.25,.75)
 sigmaU<- function(x) {ifelse(( x < -4*pi/9 ),1+cos(2.25*x),ifelse(( x > 4*pi/9 ),1+cos(2.25*x), 0))}
 titletable<-"Design 10"
 
 Simulation(alpha, beta,sigmaU,rep,n,titletable)
-
 
